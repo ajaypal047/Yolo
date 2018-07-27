@@ -1,25 +1,18 @@
-# YoloTensorFlow229
-CS 229 Course Project. Lambert, Vilim, Buhler
-
-The pre-trained weights are too big to stick on Github, so you'll need to download them from <https://drive.google.com/file/d/0BzlId5XmJ-sNWkhXSVVaVjBfSVk/view?usp=sharing>
-
-Run `python yolo.py --image_path data/dog.jpg --checkpoint_path yolo.ckpt` for images
-Run `python yolo.py --video_path data/input.mp4 --start frame1 --end frame2 --checkpoint_path yolo.ckpt` for videos
-
-Run 'python TrainYolo.py' to train the network
-
-
-python yolo.py --video_path D:\DA\YoloTensorflow\data\input.mp4 --start frame1 --end frame2 --checkpoint_path D:\DA\YoloTensorflow\weights\YOLO_small.ckpt
-
-
 import tensorflow as tf
 import os
 import time
 import argparse
 import cv2
 import numpy as np
+import csv
+import copy
+from sklearn.cluster import KMeans 
+import matplotlib.pyplot as plt  
+
+
 
 fromfile = 'test/person.jpg'
+labelFile = 'labels.csv'
 tofile_img = 'test/output.jpg'
 tofile_txt = 'test/output.txt'
 imshow = True
@@ -35,8 +28,8 @@ num_box = 2
 grid_size = 7
 classes =  ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train","tvmonitor"]
 
-w_img = 640
-h_img = 480
+w_img = 1920.0
+h_img = 1200.0
 
 def conv_layer(idx,inputs,filters,size,stride):
 	channels = inputs.get_shape().as_list()[3]
@@ -202,6 +195,162 @@ def show_results(img,results):
 	if filewrite_txt : 
 		ftxt.close()
 
+def iou_(box, clusters):
+
+    x = np.minimum(clusters[:, 0], box[0])
+    y = np.minimum(clusters[:, 1], box[1])
+	
+    intersection = x * y
+    box_area = box[0] * box[1]
+    cluster_area = clusters[:, 0] * clusters[:, 1]
+
+    iou = intersection / (box_area + cluster_area - intersection)
+	
+    return iou
+
+def kmeans(boxes, k, dist=np.median):
+    rows = boxes.shape[0]
+
+    distances = np.empty((rows, k))
+    last_clusters = np.zeros((rows,))
+
+    np.random.seed()
+
+    clusters = boxes[np.random.choice(rows, k, replace=False)]
+
+    while True:
+        for row in range(rows):
+            distances[row] = 1 - iou_(boxes[row], clusters)
+
+        nearest_clusters = np.argmin(distances, axis=1)
+
+        if (last_clusters == nearest_clusters).all():
+            break
+
+        for cluster in range(k):
+            clusters[cluster] = dist(boxes[nearest_clusters == cluster], axis=0)
+
+        last_clusters = nearest_clusters
+
+    return clusters
+
+def readLabelData():
+	labelList = []
+	anchorBox= []
+	
+	with open('D:\DA\YoloTensorflow\myTest\labels.csv','r') as f: 
+		next(f)
+		reader = csv.reader(f)
+		for row in reader:
+			anchorBox.append([(int(row[2])-int(row[0]))*448.0/w_img/64.0,(int(row[3])-int(row[1]))*448.0/h_img/64.0])
+	
+	anchorBoxes = kmeans(np.array(anchorBox),2)
+	
+	labels =[]
+	labelsFinal = []
+
+	with open(labelFile,'r') as f:
+		next(f)
+		reader = csv.reader(f)
+		count = 0
+		imageNameTemp = ''
+		for row in reader:
+			if(count==0):
+				imageNameTemp = row[4]
+				count=count+1
+			
+			imageName = row[4]
+			
+			if(imageName != imageNameTemp):
+				labelsFinal.append({'ImageName': imageNameTemp,'labels':labels, })
+				imageNameTemp = imageName
+				labels = []
+				
+			width = float(int(row[2])-int(row[0]))*448.0/w_img/64.0
+			height = float(int(row[3])-int(row[1]))*448.0/h_img/64.0
+			xCenter = float(int(row[2])+int(row[0]))/2.0
+			yCenter = float(int(row[3])+int(row[1]))/2.0
+
+			xCenter = xCenter*448.0/w_img
+			yCenter = xCenter*448.0/h_img
+
+			xloc = 0
+			yloc = 0
+			xCenterGrid = 0
+			yCenterGrid = 0
+
+			for i in range(8):
+				diffX = xCenter-i*64
+				diffY = yCenter-i*64
+
+				if(diffX<0):
+					xCenterGrid = diffX+64
+					xCenter = 448
+					xloc = i-1
+				if(diffY<0):
+					yCenterGrid = diffY+64
+					yCenter = 448
+					yloc = i-1
+			
+
+			labels.append({'hw': [width,height],'coordinates': [float(xCenterGrid/64.0),float(yCenterGrid/64.0)],'class': row[5].lower(),'grid' : [xloc,yloc]})
+		labelsFinal.append({'ImageName': imageNameTemp,'labels':labels})
+		labels = []
+		
+		Matrixlabel = np.zeros((50))
+		
+		oneHot = []
+		count = 0
+		for lauda in labelsFinal:
+			if(count==0):
+				print("imageName",lauda['ImageName'])
+				for l in lauda['labels']:
+					if(count==0):
+						for y in range(7):
+							for x in range(7):
+								if(l['grid']==[x,y]):
+									print("grid " , l['grid'])
+									iouCheck = iou_(l['hw'],anchorBoxes)
+									if(iouCheck[0]>iouCheck[1]):
+										Matrixlabel[0] = 1
+										Matrixlabel[1] = l['hw'][0]
+										Matrixlabel[2] = l['hw'][1]
+										Matrixlabel[3] = l['coordinates'][0]
+										Matrixlabel[4] = l['coordinates'][1]
+										for lo in range(len(classes)):
+											if(classes[lo] == l['class']):
+												Matrixlabel[5+lo] = 1.0
+									else:
+										Matrixlabel[25] = 1
+										Matrixlabel[26] = l['hw'][0]
+										Matrixlabel[27] = l['hw'][1]
+										Matrixlabel[28] = l['coordinates'][0]
+										Matrixlabel[29] = l['coordinates'][1]
+										for lo in range(len(classes)):
+											if(classes[lo] == l['class']):
+												Matrixlabel[30+lo] = 1.0
+								oneHot.extend(Matrixlabel)
+								Matrixlabel = np.zeros((50))
+					count+=1
+		
+			
+		print("mat ", oneHot)
+					
+
+
+
+		# with open('csvfile.csv','w') as csv_file:
+			# writer = csv.writer(csv_file)
+			# for june in labelsFinal:
+				# writer.writerow(june['ImageName'])
+				
+		
+		
+			
+	
+
+
+
 def iou(box1,box2):
 	tb = min(box1[0]+0.5*box1[2],box2[0]+0.5*box2[2])-max(box1[0]-0.5*box1[2],box2[0]-0.5*box2[2])
 	lr = min(box1[1]+0.5*box1[3],box2[1]+0.5*box2[3])-max(box1[1]-0.5*box1[3],box2[1]-0.5*box2[3])
@@ -211,8 +360,9 @@ def iou(box1,box2):
 
 
 if __name__ == '__main__':
-	parser = argparse.ArgumentParser()
-	parser.add_argument('--Directory',type = str, default= None, help = 'Please provide the input directory')
-	sess, fc_32, x = build_model()
-	detect_from_file(fromfile,sess,fc_32,x)
-	cv2.waitKey(1000)
+	# parser = argparse.ArgumentParser()
+	# parser.add_argument('--Directory',type = str, default= None, help = 'Please provide the input directory')
+	# sess, fc_32, x = build_model()
+	# detect_from_file(fromfile,sess,fc_32,x)
+	# cv2.waitKey(1000)
+	readLabelData()
