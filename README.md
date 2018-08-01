@@ -7,12 +7,15 @@ import numpy as np
 import csv
 import copy
 from sklearn.cluster import KMeans 
-import matplotlib.pyplot as plt  
+import matplotlib.pyplot as plt 
+
+from sklearn.model_selection import train_test_split 
 
 
 
 fromfile = 'test/person.jpg'
-labelFile = 'labels.csv'
+labelFile = '/Users/claw/Downloads/tensorFlow/labels.csv'
+datadir = '/Users/claw/Downloads/tensorFlow/object-detection-crowdai/'
 tofile_img = 'test/output.jpg'
 tofile_txt = 'test/output.txt'
 imshow = True
@@ -26,8 +29,7 @@ iou_threshold = 0.5
 num_class = 20
 num_box = 2
 grid_size = 7
-classes =  ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train","tvmonitor"]
-
+classes =  ["Car","Truck","Pedestrian"]
 w_img = 1920.0
 h_img = 1200.0
 
@@ -107,6 +109,43 @@ def build_model():
 	print("Loading complete!" + '\n')
 	return sess, fc_32, x
 
+def getFiles(data):
+	filelist = []
+	for file in os.listdir(data):
+    if file.endswith(".npy"):
+        filelist.append(os.path.join(data+"/", file))
+
+    filelist.shuffle()
+
+    train, test = train_test_split(filelist, test_size=0.33, random_state=42) 
+    return train, test
+
+
+def train():
+
+	trainSet, valSet = getFiles('/Users/claw/Downloads/tensorFlow/loadedLabels/')
+
+	for trainFile in trainSet:
+		trainSample = np.load(trainFile)
+		x_input = []
+		labels = []
+		for x in trainSample:
+			x_input.append(cv2.imread(x['image']))
+			labels.append(x['labels'])
+
+	    feed_dict = {'inputBatch': x_input, 'labels': labels} 
+
+	    fetches = [train_op, loss_op, summary_op] 
+	    fetched = sess.run(fetches, feed_dict)
+	    loss = fetched[1]
+
+	    # self.writer.add_summary(fetched[2], i)
+
+	    # ckpt = (i+1) % 10 #(self.FLAGS.save // self.FLAGS.batch)
+	    # args = [step_now, profile]
+	    # if not ckpt: _save_ckpt(self, *args) 
+
+
 def detect_from_file(filename,sess,fc_32,x):
 	img = cv2.imread(filename)
 	s = time.time()
@@ -122,78 +161,6 @@ def detect_from_file(filename,sess,fc_32,x):
 	show_results(img,result)
 	strtime = str(time.time()-s)
 
-def interpret_output(output):
-	probs = np.zeros((7,7,2,20))
-	class_probs = np.reshape(output[0:980],(7,7,20))
-	scales = np.reshape(output[980:1078],(7,7,2))
-	boxes = np.reshape(output[1078:],(7,7,2,4))
-	offset = np.transpose(np.reshape(np.array([np.arange(7)]*14),(2,7,7)),(1,2,0))
-
-	boxes[:,:,:,0] += offset
-	boxes[:,:,:,1] += np.transpose(offset,(1,0,2))
-	boxes[:,:,:,0:2] = boxes[:,:,:,0:2] / 7.0
-	boxes[:,:,:,2] = np.multiply(boxes[:,:,:,2],boxes[:,:,:,2])
-	boxes[:,:,:,3] = np.multiply(boxes[:,:,:,3],boxes[:,:,:,3])
-	
-	boxes[:,:,:,0] *= w_img
-	boxes[:,:,:,1] *= h_img
-	boxes[:,:,:,2] *= w_img
-	boxes[:,:,:,3] *= h_img
-
-	for i in range(2):
-		for j in range(20):
-			probs[:,:,i,j] = np.multiply(class_probs[:,:,j],scales[:,:,i])
-
-	filter_mat_probs = np.array(probs>=threshold,dtype='bool')
-	filter_mat_boxes = np.nonzero(filter_mat_probs)
-	boxes_filtered = boxes[filter_mat_boxes[0],filter_mat_boxes[1],filter_mat_boxes[2]]
-	probs_filtered = probs[filter_mat_probs]
-	classes_num_filtered = np.argmax(filter_mat_probs,axis=3)[filter_mat_boxes[0],filter_mat_boxes[1],filter_mat_boxes[2]] 
-
-	argsort = np.array(np.argsort(probs_filtered))[::-1]
-	boxes_filtered = boxes_filtered[argsort]
-	probs_filtered = probs_filtered[argsort]
-	classes_num_filtered = classes_num_filtered[argsort]
-	
-	for i in range(len(boxes_filtered)):
-		if probs_filtered[i] == 0 : continue
-		for j in range(i+1,len(boxes_filtered)):
-			if iou(boxes_filtered[i],boxes_filtered[j]) > iou_threshold : 
-				probs_filtered[j] = 0.0
-	
-	filter_iou = np.array(probs_filtered>0.0,dtype='bool')
-	boxes_filtered = boxes_filtered[filter_iou]
-	probs_filtered = probs_filtered[filter_iou]
-	classes_num_filtered = classes_num_filtered[filter_iou]
-
-	result = []
-	for i in range(len(boxes_filtered)):
-		result.append([classes[classes_num_filtered[i]],boxes_filtered[i][0],boxes_filtered[i][1],boxes_filtered[i][2],boxes_filtered[i][3],probs_filtered[i]])
-
-	return result
-
-def show_results(img,results):
-	img_cp = img.copy()
-	if filewrite_txt :
-		ftxt = open(tofile_txt,'w')
-	for i in range(len(results)):
-		x = int(results[i][1])
-		y = int(results[i][2])
-		w = int(results[i][3])//2
-		h = int(results[i][4])//2
-		if filewrite_img or imshow:
-			cv2.rectangle(img_cp,(x-w,y-h),(x+w,y+h),(0,255,0),2)
-			cv2.rectangle(img_cp,(x-w,y-h-20),(x+w,y-h),(125,125,125),-1)
-			cv2.putText(img_cp,results[i][0] + ' : %.2f' % results[i][5],(x-w+5,y-h-7),cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,0,0),1)
-		if filewrite_txt :				
-			ftxt.write(results[i][0] + ',' + str(x) + ',' + str(y) + ',' + str(w) + ',' + str(h)+',' + str(results[i][5]) + '\n')
-	if filewrite_img: 
-		cv2.imwrite(tofile_img,img_cp)			
-	if imshow :
-		cv2.imshow('YOLO_small detection',img_cp)
-		cv2.waitKey(1)
-	if filewrite_txt : 
-		ftxt.close()
 
 def iou_(box, clusters):
 
@@ -235,121 +202,151 @@ def kmeans(boxes, k, dist=np.median):
     return clusters
 
 def readLabelData():
-	labelList = []
-	anchorBox= []
+	# anchorBox= []
 	
-	with open('D:\DA\YoloTensorflow\myTest\labels.csv','r') as f: 
-		next(f)
-		reader = csv.reader(f)
-		for row in reader:
-			anchorBox.append([(int(row[2])-int(row[0]))*448.0/w_img/64.0,(int(row[3])-int(row[1]))*448.0/h_img/64.0])
+	# with open('/Users/claw/Downloads/tensorFlow/object-detection-crowdai/labels.csv','r') as f: 
+	# 	next(f)
+	# 	reader = csv.reader(f)
+	# 	for row in reader:
+	# 		anchorBox.append([(int(row[2])-int(row[0]))*448.0/w_img/64.0,(int(row[3])-int(row[1]))*448.0/h_img/64.0])
 	
-	anchorBoxes = kmeans(np.array(anchorBox),2)
-	
-	labels =[]
-	labelsFinal = []
+	if(os.path.isfile('FinalLabels.npy')):
+		print("labels loaded")
+		return np.load('FinalLabels.npy')
 
-	with open(labelFile,'r') as f:
-		next(f)
-		reader = csv.reader(f)
-		count = 0
-		imageNameTemp = ''
-		for row in reader:
-			if(count==0):
-				imageNameTemp = row[4]
-				count=count+1
-			
-			imageName = row[4]
-			
-			if(imageName != imageNameTemp):
-				labelsFinal.append({'ImageName': imageNameTemp,'labels':labels, })
-				imageNameTemp = imageName
-				labels = []
+	else:
+		anchorBoxes = np.array([[0.15677083, 0.2275], [ 0.4484375, 0.65333333]])#kmeans(np.array(anchorBox),2)
+		
+		labels =[]
+		labelsFinal = []
+		imageName = []
+		# recTangle = []
+
+		with open(labelFile,'r') as f:
+			next(f)
+			reader = csv.reader(f)
+			count = 0
+			imageNameTemp = ''
+			for row in reader:
+				if(count==0):
+					imageNameTemp = row[4]
+					count=count+1
 				
-			width = float(int(row[2])-int(row[0]))*448.0/w_img/64.0
-			height = float(int(row[3])-int(row[1]))*448.0/h_img/64.0
-			xCenter = float(int(row[2])+int(row[0]))/2.0
-			yCenter = float(int(row[3])+int(row[1]))/2.0
+				imageName = row[4]
 
-			xCenter = xCenter*448.0/w_img
-			yCenter = xCenter*448.0/h_img
+				if(imageNameTemp == ''):
+					imageNameTemp = imageName
 
-			xloc = 0
-			yloc = 0
-			xCenterGrid = 0
-			yCenterGrid = 0
+				width = float(int(row[2])-int(row[0]))*448.0/w_img/16.0
+				height = float(int(row[3])-int(row[1]))*448.0/h_img/16.0
+				xCenter = float(int(row[2])+int(row[0]))//2.0
+				yCenter = float(int(row[3])+int(row[1]))//2.0
+				xCenter = xCenter*448.0/w_img
+				yCenter = yCenter*448.0/h_img
 
-			for i in range(8):
-				diffX = xCenter-i*64
-				diffY = yCenter-i*64
+				xloc = 0
+				yloc = 0
+				xCenterGrid = 0
+				yCenterGrid = 0
 
-				if(diffX<0):
-					xCenterGrid = diffX+64
-					xCenter = 448
-					xloc = i-1
-				if(diffY<0):
-					yCenterGrid = diffY+64
-					yCenter = 448
-					yloc = i-1
-			
-
-			labels.append({'hw': [width,height],'coordinates': [float(xCenterGrid/64.0),float(yCenterGrid/64.0)],'class': row[5].lower(),'grid' : [xloc,yloc]})
-		labelsFinal.append({'ImageName': imageNameTemp,'labels':labels})
-		labels = []
-		
-		Matrixlabel = np.zeros((50))
-		
-		oneHot = []
-		count = 0
-		for lauda in labelsFinal:
-			if(count==0):
-				print("imageName",lauda['ImageName'])
-				for l in lauda['labels']:
-					if(count==0):
-						for y in range(7):
-							for x in range(7):
-								if(l['grid']==[x,y]):
-									print("grid " , l['grid'])
-									iouCheck = iou_(l['hw'],anchorBoxes)
-									if(iouCheck[0]>iouCheck[1]):
-										Matrixlabel[0] = 1
-										Matrixlabel[1] = l['hw'][0]
-										Matrixlabel[2] = l['hw'][1]
-										Matrixlabel[3] = l['coordinates'][0]
-										Matrixlabel[4] = l['coordinates'][1]
-										for lo in range(len(classes)):
-											if(classes[lo] == l['class']):
-												Matrixlabel[5+lo] = 1.0
-									else:
-										Matrixlabel[25] = 1
-										Matrixlabel[26] = l['hw'][0]
-										Matrixlabel[27] = l['hw'][1]
-										Matrixlabel[28] = l['coordinates'][0]
-										Matrixlabel[29] = l['coordinates'][1]
-										for lo in range(len(classes)):
-											if(classes[lo] == l['class']):
-												Matrixlabel[30+lo] = 1.0
-								oneHot.extend(Matrixlabel)
-								Matrixlabel = np.zeros((50))
-					count+=1
-		
-			
-		print("mat ", oneHot)
+				for i in range(28):
 					
+					diffX = xCenter-i*16
+					diffY = yCenter-i*16
+
+					if(diffX<0):
+						xCenterGrid = diffX+16
+						xloc = i-1
+						xCenter = 448
+
+					if(diffY<0):
+						yCenterGrid = diffY+16
+						yloc = i-1
+						yCenter = 448
 
 
+				if(imageNameTemp!=imageName):
+					labelsFinal.append({'ImageName': imageNameTemp,'labels':labels})
+					labels = []
+					imageNameTemp = imageName
+				labels.append({'hw': [width,height],'coordinates': [float(xCenterGrid/16.0),float(yCenterGrid/16.0)],'class': row[5].lower(),'grid' : [xloc,yloc]})
 
-		# with open('csvfile.csv','w') as csv_file:
-			# writer = csv.writer(csv_file)
-			# for june in labelsFinal:
-				# writer.writerow(june['ImageName'])
-				
+			labelsFinal.append({'ImageName': imageName,'labels':labels})
+		#print("label ",labelsFinal)
+		Matrixlabel = np.zeros((8))
+		FinalLabels = []
+		oneHot = []
+		countLabel = 1
+		countName = 0
+		noLabels = len(labelsFinal)
+		for lauda in labelsFinal:
+			for y in range(28):
+				for x in range(28):
+					for l in lauda['labels']:
+						if(l['grid']==[x,y]):
+							Matrixlabel[0] = 1
+							Matrixlabel[1] = l['hw'][0]
+							Matrixlabel[2] = l['hw'][1]
+							Matrixlabel[3] = l['coordinates'][0]
+							Matrixlabel[4] = l['coordinates'][1]
+							for lo in range(len(classes)):
+								if(classes[lo].lower() == l['class'].lower()):
+									Matrixlabel[5+lo] = 1.0
+					oneHot.extend(Matrixlabel)
+					Matrixlabel = np.zeros((8))
+			FinalLabels.append({'image': datadir + lauda['ImageName'],'labels':oneHot})
+			oneHot = []
+			if(countLabel%100==0 or countLabel== noLabels):
+				np.save('./loadedLabels/Final_labels_'+str(countName)+'.npy', FinalLabels)
+				FinalLabels = []
+				countName = countName+1
+			countLabel=countLabel+1
+
+		print("labels saving done")
+		return FinalLabels
+
+#def loss(pred,labels):				
 		
-		
-			
+def drawLabel(labelsFinal):
+	print("drawing label")
+	imageName = labelsFinal['image']
+	rect = []
+	coordinate = []
+	text = []
+
+	img = cv2.imread(imageName)
+
+	img = cv2.resize(img,(448,448))
+
+	font = cv2.FONT_HERSHEY_SIMPLEX
+
+	label = labelsFinal['labels']
 	
+	j=0
+	k=0
 
+	for i in range(0,len(label),8):
+			if(label[i]==1):
+				pixel_locX = label[i+3]*16.0+j*16.0
+				pixel_locY = label[i+4]*16.0+k*16.0
+				width = label[i+1]*16.0
+				height = label[i+2]*16.0
+				classNo = classes[np.argmax(label[i+5:i+8])]
+				rect.append([width//2.0,height//2.0])
+				coordinate.append([pixel_locX,pixel_locY])
+				text.append(classNo)
+			j=j+1
+			if(j%28==0):
+				j=0
+				k=k+1
 
+	for i in range(len(rect)):
+		cv2.rectangle(img, (int(coordinate[i][0]-rect[i][0]),int(coordinate[i][1]-rect[i][1])), (int(coordinate[i][0]+rect[i][0]),int(coordinate[i][1]+rect[i][1])), (0,255,0), 2)
+		cv2.putText(img, text[i], (int(coordinate[i][0]),int(coordinate[i][1])), font, 0.1, (0, 255, 0), 2, cv2.LINE_AA)
+
+	cv2.imshow("1",img)
+	cv2.waitKey(0)		
+			
 
 def iou(box1,box2):
 	tb = min(box1[0]+0.5*box1[2],box2[0]+0.5*box2[2])-max(box1[0]-0.5*box1[2],box2[0]-0.5*box2[2])
@@ -365,4 +362,4 @@ if __name__ == '__main__':
 	# sess, fc_32, x = build_model()
 	# detect_from_file(fromfile,sess,fc_32,x)
 	# cv2.waitKey(1000)
-	readLabelData()
+	train()
