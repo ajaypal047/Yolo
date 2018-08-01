@@ -8,14 +8,19 @@ import csv
 import copy
 from sklearn.cluster import KMeans 
 import matplotlib.pyplot as plt 
+import random
 
 from sklearn.model_selection import train_test_split 
+
+LAMBDA_COORD = 5
+LAMBDA_NOOBJ = 0.5
+THRESHOLD = 0.6
 
 
 
 fromfile = 'test/person.jpg'
-labelFile = '/Users/claw/Downloads/tensorFlow/labels.csv'
-datadir = '/Users/claw/Downloads/tensorFlow/object-detection-crowdai/'
+labelFile = 'F:/YoloTensorflow/myTest/train/object-detection-crowdai/labels.csv'
+datadir = 'F:/YoloTensorflow/myTest/train/object-detection-crowdai/'
 tofile_img = 'test/output.jpg'
 tofile_txt = 'test/output.txt'
 imshow = True
@@ -68,8 +73,8 @@ def fc_layer(idx,input,hidden,flat = False, linear = False):
 	else:
 		return tf.nn.leaky_relu(tf.add(tf.matmul(input, weight),biases),alpha=0.1,name= str(idx)+'_FC_Relu')	
 
-def build_model():
-	x = tf.placeholder('float32',[None,448,448,3])
+def build_model(x):
+
 	conv_1 = conv_layer(1,x,64,7,2)
 	pool_2 = pooling_layer(2,conv_1,2,2)
 	conv_3 = conv_layer(3,pool_2,192,3,1)
@@ -106,39 +111,69 @@ def build_model():
 	sess.run(tf.initialize_all_variables())
 	saver = tf.train.Saver()
 	saver.restore(sess,weights_file)
+	fc_33 = fc_layer(33,fc_32,2048,flat=False,linear=True)
+
 	print("Loading complete!" + '\n')
-	return sess, fc_32, x
+	return sess, fc_33, saver
 
 def getFiles(data):
 	filelist = []
 	for file in os.listdir(data):
-    if file.endswith(".npy"):
-        filelist.append(os.path.join(data+"/", file))
+		if file.endswith(".npy"):
+			filelist.append(os.path.join(data+"/", file))
 
-    filelist.shuffle()
+	random.shuffle(filelist)
 
-    train, test = train_test_split(filelist, test_size=0.33, random_state=42) 
-    return train, test
+	train, test = train_test_split(filelist, test_size=0.33, random_state=42) 
+	return train, test
 
+def loss(outPut, trainlabels):
+	lossNum = 0
+	for i in range(0,2048,8):
+		coordLoss = LAMBDA_COORD * tf.reduce_sum(tf.multiply(trainlabels[ : ,i+0],tf.add(tf.square(tf.subtract(trainlabels[ : ,i+3],outPut[ : ,i+3])),(tf.square(tf.subtract(trainlabels[ : ,i+4],outPut[ : ,i+4]))))))
+
+		sizeLoss = LAMBDA_COORD * tf.reduce_sum(tf.multiply(trainlabels[ : ,i+0],tf.add(tf.square(tf.subtract(tf.sqrt(trainlabels[ : ,i+1]),tf.sqrt(outPut[ : ,i+1]))),(tf.square(tf.subtract(tf.sqrt(trainlabels[ : ,i+2]),tf.sqrt(outPut[ : ,i+2])))))))
+
+		objectnessLoss = tf.reduce_sum(tf.multiply(trainlabels[ : ,i+0],tf.square(tf.subtract(trainlabels[ : ,i+0],outPut[ : ,i+0]))))
+
+		noObjectnessLoss = LAMBDA_NOOBJ*tf.reduce_sum(tf.multiply(tf.subtract(1.0,trainlabels[ : ,i+0]),tf.square(tf.subtract(trainlabels[ : ,i+0],outPut[ : ,i+0]))))
+
+		probLoss = tf.reduce_sum(tf.multiply(trainlabels[ : ,i+0],tf.reduce_sum(tf.square(tf.subtract(trainlabels[ : ,i+5:i+7],outPut[ : ,i+5:i+7])),1)))
+
+		lossNum = lossNum + tf.reduce_sum(lossNum + coordLoss + sizeLoss + objectnessLoss + noObjectnessLoss + probLoss)
+
+	return lossNum
+		
 
 def train():
 
-	trainSet, valSet = getFiles('/Users/claw/Downloads/tensorFlow/loadedLabels/')
+	trainSet, valSet = getFiles('F:/YoloTensorflow/myTest/loadedLabels/')
+	
+	trainInput = tf.placeholder('float32',[None,448,448,3])
+	
+	sess, outPut, saver = build_model(trainInput)
+	
+	trainlabels = tf.placeholder('float32',[None,2048])
+	
+	loss_op = loss(outPut, trainlabels)  
+	
+	trainOpt = tf.train.AdamOptimizer(0.0005).minimize(loss_op, var_list=[var for var in tf.trainable_variables()])
+
+	#saver.restore(sess, "updated.ckpt")
 
 	for trainFile in trainSet:
 		trainSample = np.load(trainFile)
 		x_input = []
 		labels = []
 		for x in trainSample:
-			x_input.append(cv2.imread(x['image']))
+			x_input.append(cv2.resize(cv2.imread(x['image']),(448,448)))
+			print(x['labels'])
 			labels.append(x['labels'])
 
-	    feed_dict = {'inputBatch': x_input, 'labels': labels} 
-
-	    fetches = [train_op, loss_op, summary_op] 
-	    fetched = sess.run(fetches, feed_dict)
-	    loss = fetched[1]
-
+			feed_dict = {trainInput: x_input, trainlabels: labels}  
+			fetched = sess.run([trainOpt, loss_op], feed_dict)
+			saver.save(sess,"updated.ckpt")
+			print("loss ",fetched[1])
 	    # self.writer.add_summary(fetched[2], i)
 
 	    # ckpt = (i+1) % 10 #(self.FLAGS.save // self.FLAGS.batch)
@@ -297,7 +332,7 @@ def readLabelData():
 			FinalLabels.append({'image': datadir + lauda['ImageName'],'labels':oneHot})
 			oneHot = []
 			if(countLabel%100==0 or countLabel== noLabels):
-				np.save('./loadedLabels/Final_labels_'+str(countName)+'.npy', FinalLabels)
+				np.save('F:/YoloTensorflow/myTest/loadedLabels/Final_labels_'+str(countName)+'.npy', FinalLabels)
 				FinalLabels = []
 				countName = countName+1
 			countLabel=countLabel+1
@@ -357,9 +392,4 @@ def iou(box1,box2):
 
 
 if __name__ == '__main__':
-	# parser = argparse.ArgumentParser()
-	# parser.add_argument('--Directory',type = str, default= None, help = 'Please provide the input directory')
-	# sess, fc_32, x = build_model()
-	# detect_from_file(fromfile,sess,fc_32,x)
-	# cv2.waitKey(1000)
 	train()
