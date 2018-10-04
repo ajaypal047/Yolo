@@ -1,3 +1,19 @@
+#How to store & transfer time-series data efficiently.
+
+#What is Bayes classifier?  
+
+#Write a code to implement queue using stacks?  
+
+#How do you handle continuous large amount of data input collected from sensors?   
+
+#Write a code to implement queue using stacks?
+
+#was asked to write a program to combine a time series data
+
+#How will you optimize the upload of a Time-series sensor data from phone to server?
+
+
+
 import tensorflow as tf
 import os
 import time
